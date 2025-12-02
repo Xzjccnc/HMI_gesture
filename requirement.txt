@@ -1,0 +1,15 @@
+操作系统：Windows 10/11
+开发工具：HBuilderX 3.9 及以上（支持 UVue 与 renderjs）
+可选：Node.js 16 及以上（如需使用 CLI 或包管理）
+
+运行权限：
+- 摄像头（浏览器/APP 均需允许）
+
+网络要求：
+- 可访问外部 CDN（cdnjs、jsDelivr）
+
+外部依赖（CDN 引入）：
+- three.js r128（https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js）
+- @mediapipe/camera_utils（https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js）
+- @mediapipe/control_utils（https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js）
+- @mediapipe/hands（https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js）
