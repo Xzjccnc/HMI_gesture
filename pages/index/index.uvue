@@ -1,0 +1,512 @@
+<template>
+	<view class="container">
+		<!-- 3D 背景容器 (由 renderjs 接管) -->
+		<view id="canvas-bg" class="canvas-bg"></view>
+		
+		<!-- 隐藏的视频元素 (用于 AI 分析) -->
+		<!-- 注意：在 UniApp H5/App-Vue 中，renderjs 可以通过 document 访问到这个原生 video 元素 -->
+		<video id="input-video" class="hidden-video" autoplay playsinline muted></video>
+
+		<!-- 手势光标 -->
+		<view :class="['hand-cursor', { 'hidden': !handDetected, 'pinching': isPinching }]" :style="{ left: cursorX + 'px', top: cursorY + 'px' }"></view>
+
+		<!-- UI 层 -->
+		<view class="ui-layer" v-if="isSystemRunning">
+			<!-- 顶部状态栏 -->
+			<view class="status-bar">
+				<view class="status-left">
+					<text class="icon-wifi">WIFI</text>
+					<text class="time-text">21:45</text>
+					<text class="user-badge">USER: ADMIN</text>
+				</view>
+				<view class="status-right">
+					<text class="temp-text">22°C</text>
+					<text class="gesture-status" :class="{ 'active': gestureToast }">{{ gestureToast }}</text>
+				</view>
+			</view>
+
+			<!-- 屏幕内容区域 -->
+			<view class="screen-container">
+				
+				<!-- Screen 1: 仪表盘 -->
+				<view class="screen" :class="{ 'active': currentScreen === 0 }">
+					<view class="dashboard-layout">
+						<view class="speed-panel">
+							<view class="speed-circle">
+								<view class="spinner"></view>
+								<view class="speed-content">
+									<text class="speed-num">{{ Math.floor(speed) }}</text>
+									<text class="speed-unit">KM/H</text>
+								</view>
+							</view>
+							<view class="car-stats">
+								<view class="stat-item"><text class="stat-val text-green">85%</text><text class="stat-label">电量</text></view>
+								<view class="stat-item"><text class="stat-val">320</text><text class="stat-label">续航</text></view>
+								<view class="stat-item"><text class="stat-val">D</text><text class="stat-label">档位</text></view>
+							</view>
+						</view>
+						<view class="widget-panel">
+							<view class="glass-card mini-map">
+								<text class="card-title">导航中 - 剩余 12KM</text>
+								<view class="map-line"></view>
+							</view>
+							<view class="glass-card mini-music">
+								<view class="music-icon-box">♫</view>
+								<view class="music-info">
+									<text class="song-title">Cyberdrive</text>
+									<text class="artist-name">Neon City</text>
+								</view>
+							</view>
+						</view>
+					</view>
+				</view>
+
+				<!-- Screen 2: 地图 -->
+				<view class="screen" :class="{ 'active': currentScreen === 1 }">
+					<view class="glass-card full-card map-card">
+						<view class="map-grid-layer" :style="{ transform: 'scale(' + mapZoom + ')' }"></view>
+						<view class="map-ui">
+							<text class="page-title">导航地图</text>
+							<text class="page-subtitle">目标: 科技园区 A 座</text>
+							<view class="zoom-indicator">
+								<text>缩放: {{ Math.floor(mapZoom * 100) }}%</text>
+							</view>
+						</view>
+						<view class="center-marker"></view>
+					</view>
+				</view>
+
+				<!-- Screen 3: 音乐 -->
+				<view class="screen" :class="{ 'active': currentScreen === 2 }">
+					<view class="music-layout">
+						<view class="album-art">
+							<view class="album-circle"></view>
+						</view>
+						<text class="music-title-lg">Midnight Drive</text>
+						<view class="volume-control">
+							<view class="vol-label-row">
+								<text class="vol-icon">-</text>
+								<text class="vol-text">VOL {{ Math.floor(volume) }}%</text>
+								<text class="vol-icon">+</text>
+							</view>
+							<view class="vol-track">
+								<view class="vol-fill" :style="{ width: volume + '%' }"></view>
+							</view>
+						</view>
+						<text class="hint-text">👌 捏合手势调节音量</text>
+					</view>
+				</view>
+
+			</view>
+
+			<!-- 底部导航点 -->
+			<view class="nav-dots">
+				<view class="dot" :class="{ 'active': currentScreen === 0 }"></view>
+				<view class="dot" :class="{ 'active': currentScreen === 1 }"></view>
+				<view class="dot" :class="{ 'active': currentScreen === 2 }"></view>
+			</view>
+		</view>
+
+		<!-- 启动界面 -->
+		<view class="loader-layer" v-if="!isSystemRunning">
+			<text class="loader-title">VISION OS</text>
+			<text class="loader-subtitle">{{ statusMessage }}</text>
+			<button class="start-btn" @click="triggerStart">启动引擎 (开启摄像头)</button>
+		</view>
+
+		<!-- 逻辑层与视图层通信桥梁 -->
+		<view :prop="logicState" :change:prop="three.updateState" class="hidden-bridge"></view>
+	</view>
+</template>
+
+<script>
+	export default {
+		data() {
+			return {
+				isSystemRunning: false,
+				statusMessage: "车载手势控制系统就绪",
+				
+				currentScreen: 0,
+				volume: 50,
+				mapZoom: 1.0,
+				speed: 0,
+				
+				handDetected: false,
+				isPinching: false,
+				cursorX: -100,
+				cursorY: -100,
+				gestureToast: '',
+				
+				logicState: {
+					running: false,
+					timestamp: 0
+				}
+			}
+		},
+		mounted() {
+			setInterval(() => {
+				if (this.isSystemRunning) {
+					if (this.speed < 80) this.speed += Math.random() * 2;
+					else if (this.speed > 85) this.speed -= Math.random() * 2;
+				}
+			}, 100);
+		},
+		methods: {
+			triggerStart() {
+				this.statusMessage = "正在初始化传感器...";
+				this.logicState = { running: true, timestamp: Date.now() };
+			},
+			onSystemReady() {
+				this.isSystemRunning = true;
+			},
+			onSystemError(msg) {
+				this.statusMessage = "错误: " + msg;
+				this.logicState = { running: false, timestamp: 0 };
+			},
+			updateHandStatus(data) {
+				this.handDetected = data.detected;
+				this.cursorX = data.x;
+				this.cursorY = data.y;
+				this.isPinching = data.pinching;
+			},
+			handleGestureAction(action) {
+				if (action.type === 'swipe') {
+					if (action.direction === 'next') {
+						this.currentScreen = (this.currentScreen + 1) % 3;
+						this.showToast("向左挥动");
+					} else {
+						this.currentScreen = (this.currentScreen - 1 + 3) % 3;
+						this.showToast("向右挥动");
+					}
+				} else if (action.type === 'pinch_value') {
+					const val = action.value;
+					if (this.currentScreen === 2) { 
+						this.volume = Math.min(100, Math.max(0, val * 100));
+					} else if (this.currentScreen === 1) {
+						this.mapZoom = 0.5 + (val * 3);
+					}
+				}
+			},
+			showToast(msg) {
+				this.gestureToast = msg;
+				setTimeout(() => {
+					this.gestureToast = '';
+				}, 1500);
+			}
+		}
+	}
+</script>
+
+<script module="three" lang="renderjs">
+	export default {
+		methods: {
+			updateState(newValue, oldValue, ownerInstance, instance) {
+				if (newValue.running && newValue.timestamp !== (oldValue ? oldValue.timestamp : 0)) {
+					this.initSystem(ownerInstance);
+				}
+			},
+			loadScript(url) {
+				return new Promise((resolve, reject) => {
+					var script = document.createElement('script');
+					script.src = url;
+					script.onload = resolve;
+					script.onerror = reject;
+					script.crossOrigin = "anonymous";
+					document.head.appendChild(script);
+				});
+			},
+			async initSystem(ownerInstance) {
+				try {
+					// 初始化状态变量
+					this.scene = null;
+					this.camera = null;
+					this.renderer = null;
+					this.stars = null;
+					this.gridHelper = null;
+					this.hands = null;
+					this.lastHandX = null;
+					this.lastGestureTime = 0;
+
+					if (!window.THREE) await this.loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
+					if (!window.Camera) await this.loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
+					if (!window.ControlUtils) await this.loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js');
+					if (!window.Hands) await this.loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js');
+					
+					this.initThreeJS();
+					await this.initMediaPipe(ownerInstance);
+					
+					ownerInstance.callMethod('onSystemReady');
+				} catch (e) {
+					console.error(e);
+					ownerInstance.callMethod('onSystemError', '资源加载失败或摄像头被占用');
+				}
+			},
+			initThreeJS() {
+				var container = document.getElementById('canvas-bg');
+				if (!container || this.renderer) return;
+				
+				this.scene = new THREE.Scene();
+				this.scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+				this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+				this.camera.position.z = 5;
+				this.camera.position.y = 1;
+
+				this.renderer = new THREE.WebGLRenderer({ alpha: true });
+				this.renderer.setSize(window.innerWidth, window.innerHeight);
+				container.appendChild(this.renderer.domElement);
+
+				this.gridHelper = new THREE.GridHelper(200, 100, 0x00f3ff, 0x222222);
+				this.gridHelper.position.y = -2;
+				this.scene.add(this.gridHelper);
+
+				var geometry = new THREE.BufferGeometry();
+				var vertices = [];
+				for (var i = 0; i < 3000; i++) {
+					vertices.push(
+						(Math.random() - 0.5) * 100,
+						(Math.random() - 0.5) * 60,
+						(Math.random() - 0.5) * 200
+					);
+				}
+				geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+				var material = new THREE.PointsMaterial({ color: 0x40a9ff, size: 0.15 });
+				this.stars = new THREE.Points(geometry, material);
+				this.scene.add(this.stars);
+
+				// 关键修复：使用 self 捕获 this 上下文
+				var self = this;
+				var animate = function() {
+					requestAnimationFrame(animate);
+					var speed = 0.5; 
+					if(self.gridHelper) {
+						self.gridHelper.position.z += speed;
+						if(self.gridHelper.position.z > 2) self.gridHelper.position.z = 0;
+					}
+					if(self.stars) {
+						self.stars.position.z += speed;
+						if(self.stars.position.z > 100) self.stars.position.z = -100;
+					}
+					if(self.renderer && self.scene && self.camera) {
+						self.renderer.render(self.scene, self.camera);
+					}
+				};
+				animate();
+			},
+			async initMediaPipe(ownerInstance) {
+				var videoElement = document.getElementById('input-video');
+				
+				this.hands = new Hands({locateFile: function(file) {
+					return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/' + file;
+				}});
+				
+				this.hands.setOptions({
+					maxNumHands: 1,
+					modelComplexity: 1,
+					minDetectionConfidence: 0.5,
+					minTrackingConfidence: 0.5
+				});
+				
+				var self = this;
+				this.hands.onResults(function(results) {
+					if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+						var landmarks = results.multiHandLandmarks[0];
+						var indexTip = landmarks[8];
+						var thumbTip = landmarks[4];
+						var wrist = landmarks[0];
+						
+						var x = (1 - indexTip.x) * window.innerWidth;
+						var y = indexTip.y * window.innerHeight;
+						
+						var dist = Math.sqrt(
+							Math.pow(thumbTip.x - indexTip.x, 2) + 
+							Math.pow(thumbTip.y - indexTip.y, 2)
+						);
+						var isPinching = dist < 0.05;
+						
+						ownerInstance.callMethod('updateHandStatus', {
+							detected: true,
+							x: x,
+							y: y,
+							pinching: isPinching
+						});
+						
+						var currentHandX = wrist.x;
+						if (self.lastHandX !== null) {
+							var deltaX = currentHandX - self.lastHandX;
+							var now = Date.now();
+							
+							if (Math.abs(deltaX) > 0.08 && (now - self.lastGestureTime > 1000)) {
+								self.lastGestureTime = now;
+								if (deltaX < 0) {
+									ownerInstance.callMethod('handleGestureAction', { type: 'swipe', direction: 'next' });
+								} else {
+									ownerInstance.callMethod('handleGestureAction', { type: 'swipe', direction: 'prev' });
+								}
+								self.lastHandX = null;
+							}
+						}
+						self.lastHandX = currentHandX;
+						
+						var normalizedValue = Math.min(1, Math.max(0, (dist - 0.02) * 5));
+						ownerInstance.callMethod('handleGestureAction', { type: 'pinch_value', value: normalizedValue });
+						
+					} else {
+						ownerInstance.callMethod('updateHandStatus', { detected: false });
+						self.lastHandX = null;
+					}
+				});
+
+				var camera = new Camera(videoElement, {
+					onFrame: async function() {
+						if(self.hands) await self.hands.send({image: videoElement});
+					},
+					width: 640,
+					height: 480
+				});
+				
+				await camera.start();
+			}
+		}
+	}
+</script>
+
+<style>
+	.container {
+		width: 100%;
+		height: 100vh;
+		background-color: #000;
+		position: relative;
+		overflow: hidden;
+	}
+	
+	.canvas-bg {
+		position: absolute;
+		top: 0; left: 0; width: 100%; height: 100%;
+		z-index: 1;
+	}
+	
+	.hidden-video {
+		position: absolute;
+		bottom: 0; right: 0; width: 1px; height: 1px;
+		opacity: 0; z-index: 0;
+	}
+	
+	.hand-cursor {
+		position: absolute;
+		width: 20px; height: 20px;
+		border: 2px solid #00f3ff;
+		border-radius: 50%;
+		z-index: 999;
+		pointer-events: none;
+		transform: translate(-50%, -50%);
+		transition: width 0.1s, height 0.1s;
+		box-shadow: 0 0 10px #00f3ff;
+	}
+	.hand-cursor.pinching {
+		background-color: #00f3ff;
+		width: 10px; height: 10px;
+	}
+	.hand-cursor.hidden { opacity: 0; }
+	
+	.ui-layer {
+		position: absolute;
+		top: 0; left: 0; width: 100%; height: 100%;
+		z-index: 10;
+		display: flex;
+		flex-direction: column;
+	}
+	
+	.status-bar {
+		height: 60px;
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 0 30px;
+		background: linear-gradient(to bottom, rgba(0,0,0,0.8), transparent);
+		color: rgba(255,255,255,0.7);
+		font-size: 14px;
+	}
+	.status-left, .status-right { display: flex; align-items: center; gap: 15px; }
+	.user-badge { background: #333; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+	.gesture-status { color: #facc15; font-weight: bold; opacity: 0; transition: opacity 0.3s; }
+	.gesture-status.active { opacity: 1; }
+	
+	.screen-container { position: relative; flex: 1; width: 100%; }
+	.screen {
+		position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+		opacity: 0; transform: scale(0.95); transition: all 0.5s ease;
+		pointer-events: none;
+		display: flex; align-items: center; justify-content: center;
+	}
+	.screen.active { opacity: 1; transform: scale(1); pointer-events: auto; }
+	
+	.glass-card {
+		background: rgba(16, 20, 30, 0.6);
+		backdrop-filter: blur(12px);
+		border: 1px solid rgba(255, 255, 255, 0.1);
+		border-radius: 20px;
+		color: white;
+	}
+	
+	.dashboard-layout { display: flex; width: 90%; height: 70%; gap: 20px; }
+	.speed-panel { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+	.speed-circle {
+		width: 250px; height: 250px;
+		border-radius: 50%;
+		border: 4px solid rgba(255,255,255,0.1);
+		position: relative;
+		display: flex; align-items: center; justify-content: center;
+		background: rgba(0,0,0,0.3);
+	}
+	.speed-num { font-size: 70px; font-weight: bold; color: white; }
+	.speed-unit { color: #40a9ff; font-size: 20px; margin-top: 5px; }
+	.car-stats { display: flex; gap: 30px; margin-top: 30px; }
+	.stat-item { display: flex; flex-direction: column; align-items: center; }
+	.stat-val { font-size: 24px; font-weight: bold; color: white; }
+	.stat-val.text-green { color: #4ade80; }
+	.stat-label { font-size: 12px; color: #aaa; }
+	
+	.widget-panel { flex: 1; display: flex; flex-direction: column; gap: 20px; justify-content: center; }
+	.mini-map { height: 180px; padding: 15px; position: relative; }
+	.map-line { width: 100%; height: 4px; background: #2563eb; margin-top: 50px; box-shadow: 0 0 10px #2563eb; }
+	.mini-music { height: 120px; padding: 15px; display: flex; align-items: center; gap: 15px; }
+	.music-icon-box { width: 60px; height: 60px; background: #7c3aed; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 24px; }
+	
+	.music-layout { display: flex; flex-direction: column; align-items: center; width: 100%; }
+	.album-art { width: 200px; height: 200px; border-radius: 50%; overflow: hidden; background: #333; margin-bottom: 20px; border: 4px solid #444; }
+	.music-title-lg { font-size: 32px; font-weight: bold; color: white; margin-bottom: 10px; }
+	.volume-control { width: 60%; margin-top: 20px; }
+	.vol-label-row { display: flex; justify-content: space-between; color: #aaa; font-size: 14px; margin-bottom: 5px; }
+	.vol-track { width: 100%; height: 8px; background: #333; border-radius: 4px; overflow: hidden; }
+	.vol-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #8b5cf6); }
+	
+	.full-card { width: 90%; height: 80%; position: relative; overflow: hidden; }
+	.map-grid-layer {
+		position: absolute; top: -50%; left: -50%; width: 200%; height: 200%;
+		background-image: linear-gradient(rgba(0, 243, 255, 0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 243, 255, 0.1) 1px, transparent 1px);
+		background-size: 40px 40px;
+		transition: transform 0.1s ease-out;
+	}
+	.map-ui { position: absolute; top: 20px; left: 20px; z-index: 2; }
+	.page-title { font-size: 24px; font-weight: bold; color: white; display: block; }
+	.page-subtitle { color: #93c5fd; font-size: 14px; margin-top: 5px; display: block; }
+	.zoom-indicator { position: absolute; bottom: 20px; right: 20px; background: rgba(0,0,0,0.5); padding: 5px 10px; border-radius: 8px; color: white; font-size: 12px; }
+	.center-marker { position: absolute; top: 50%; left: 50%; width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-bottom: 20px solid #3b82f6; transform: translate(-50%, -50%); }
+	
+	.nav-dots { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; }
+	.dot { width: 10px; height: 10px; border-radius: 50%; background: white; opacity: 0.3; }
+	.dot.active { opacity: 1; }
+	
+	.loader-layer {
+		position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+		background: black; z-index: 100;
+		display: flex; flex-direction: column; align-items: center; justify-content: center;
+	}
+	.loader-title { font-size: 30px; font-weight: bold; color: #3b82f6; margin-bottom: 10px; }
+	.loader-subtitle { color: #888; margin-bottom: 40px; font-size: 14px; }
+	.start-btn { background: #2563eb; color: white; border-radius: 30px; padding: 0 40px; font-weight: bold; border: none; }
+	
+	.hint-text { position: absolute; bottom: 80px; color: #aaa; font-size: 12px; background: rgba(0,0,0,0.5); padding: 5px 15px; border-radius: 15px; }
+	.hidden-bridge { display: none; }
+</style>
